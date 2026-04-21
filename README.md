@@ -1,2 +1,2 @@
 # M365AgentGovernance
-ools for agents management and Copilot usage in Microsoft 365
+Tools (PowerShell scripts and Azure Logic Apps) for reading agents and Copilot usage in a Microsoft 365 tenant.
