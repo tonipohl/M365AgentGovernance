@@ -1,6 +1,8 @@
 # M365 Agent Governance
 
-This repository shows how to automate Microsoft 365 Copilot and agent-related governance tasks by using Microsoft Graph REST API (beta) endpoints from either Azure Logic Apps or PowerShell.
+Resources for workshops and sessions by [Martina Grom](https://www.linkedin.com/in/martinagrom/) and [Toni Pohl](https://www.linkedin.com/in/tonipohl/) at [M365 Community Conference](https://m365conf.com/) in Orlando, FL in April 2026 
+
+This repository shows how to automate Microsoft 365 Copilot and agent-related governance tasks by using Microsoft Graph REST API (beta) endpoints from either Azure Logic Apps or PowerShell. The sample principle applies for any other programming language.
 
 The samples focus on four practical areas:
 
@@ -33,6 +35,14 @@ PowerShell/
 ```
 
 ## Logic Apps
+
+### Workflow Diagrams (Mermaid)
+
+Each Logic App is independent, so each diagram is provided in its own file:
+
+- [LogicApps/01-CopilotUsageUser.diagram.md](LogicApps/01-CopilotUsageUser.diagram.md)
+- [LogicApps/02-CopilotUsageTrend.diagram.md](LogicApps/02-CopilotUsageTrend.diagram.md)
+- [LogicApps/03-QueryAuditLog.diagram.md](LogicApps/03-QueryAuditLog.diagram.md)
 
 ### 01-CopilotUsageUser.json
 
