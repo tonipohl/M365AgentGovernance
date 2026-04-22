@@ -1,0 +1,725 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "When_a_HTTP_request_is_received": {
+                "type": "Request",
+                "kind": "Http"
+            }
+        },
+        "actions": {
+            "initConfig": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "config",
+                            "type": "object",
+                            "value": {
+                                "tableuser": "CopilotUsageUser",
+                                "tabletrend": "CopilotUsageTrend",
+                                "tablequeries": "Queries",
+                                "tablelog": "Log",
+                                "inactivitywarning": 30,
+                                "adminEmail": "toni@atwork.rocks",
+                                "debug": false
+                            }
+                        }
+                    ]
+                },
+                "runAfter": {}
+            },
+            "initenddate": {
+                "type": "InitializeVariable",
+                "description": "concat(formatDateTime(addDays(utcNow(),-1),'yyyy-MM-dd'),'T23:59:59Z')",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "enddate",
+                            "type": "string",
+                            "value": "@{concat(formatDateTime(addDays(utcNow(),0),'yyyy-MM-dd'),'T23:59:59Z')}"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "initstartdate": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "initstartdate": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "startdate",
+                            "type": "string",
+                            "value": "@{concat(formatDateTime(addDays(utcNow(),-3),'yyyy-MM-dd'),'T00:00:00Z')}"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "initApp": [
+                        "Succeeded",
+                        "Failed"
+                    ]
+                }
+            },
+            "initresult": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "result",
+                            "type": "string",
+                            "value": "@{variables('requestid')}-@{variables('status')}"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "checksucceeded": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "checkok": {
+                "type": "If",
+                "description": "Continue only if the request was ok.",
+                "expression": {
+                    "or": [
+                        {
+                            "equals": [
+                                "@variables('ok')",
+                                true
+                            ]
+                        }
+                    ]
+                },
+                "actions": {
+                    "UntilQueryFinished": {
+                        "type": "Until",
+                        "description": "run as long until we get a status = succeeded. Timeout is 1 hour, and retry 60 times, every minute: PT1H",
+                        "expression": "@equals(variables('status'),'succeeded')",
+                        "limit": {
+                            "count": 2,
+                            "timeout": "PT1M"
+                        },
+                        "actions": {
+                            "querystatus": {
+                                "type": "Http",
+                                "description": "Note: Inside the do/until loop, Pagination must be set OFF!",
+                                "inputs": {
+                                    "uri": "@{variables('graphurl')}/security/auditLog/queries/@{variables('requestid')}",
+                                    "method": "GET",
+                                    "headers": {
+                                        "Content-Type": "application/json"
+                                    },
+                                    "authentication": {
+                                        "type": "ActiveDirectoryOAuth",
+                                        "authority": "https://login.microsoft.com",
+                                        "tenant": "@{variables('app')?['tenantId']}",
+                                        "audience": "https://graph.microsoft.com/",
+                                        "clientId": "@{variables('app')?['clientId']}",
+                                        "secret": "@body('getsecret')?['value']"
+                                    }
+                                },
+                                "runtimeConfiguration": {
+                                    "contentTransfer": {
+                                        "transferMode": "Chunked"
+                                    }
+                                }
+                            },
+                            "logquerystatus": {
+                                "type": "ApiConnection",
+                                "inputs": {
+                                    "host": {
+                                        "connection": {
+                                            "name": "@parameters('$connections')['azuretables']['connectionId']"
+                                        }
+                                    },
+                                    "method": "patch",
+                                    "body": {
+                                        "query": "@{variables('graphurl')}/security/auditLog/queries/@{variables('requestid')}",
+                                        "statuscode": "@{actions('querystatus').outputs.statusCode}",
+                                        "status": "@{variables('status')}"
+                                    },
+                                    "path": "/v2/storageAccounts/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/tables/@{encodeURIComponent(variables('config')?['tablequeries'])}/entities(PartitionKey='@{encodeURIComponent('query')}',RowKey='@{encodeURIComponent(variables('requestid'))}')"
+                                },
+                                "runAfter": {
+                                    "setstatus": [
+                                        "Succeeded",
+                                        "Failed"
+                                    ]
+                                }
+                            },
+                            "Delay": {
+                                "type": "Wait",
+                                "inputs": {
+                                    "interval": {
+                                        "count": 30,
+                                        "unit": "Second"
+                                    }
+                                },
+                                "runAfter": {
+                                    "logquerystatus": [
+                                        "Succeeded",
+                                        "Failed"
+                                    ]
+                                }
+                            },
+                            "setstatus": {
+                                "type": "SetVariable",
+                                "inputs": {
+                                    "name": "status",
+                                    "value": "@body('querystatus')?['status']"
+                                },
+                                "runAfter": {
+                                    "querystatus": [
+                                        "Succeeded",
+                                        "Failed"
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                },
+                "else": {
+                    "actions": {}
+                },
+                "runAfter": {
+                    "initstatus": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "initApp": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "app",
+                            "type": "object",
+                            "value": {
+                                "tenantId": "f89d8982-a030-4c14-9b60-8dbd82b66428",
+                                "clientId": "fa0a1787-39d1-4d73-b25a-dc92968863a1"
+                            }
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "initConfig": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "initauditlogquery": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "auditlogquery",
+                            "type": "string"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "initenddate": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "initgraphurl": {
+                "type": "InitializeVariable",
+                "description": "Still only available in beta endpoint!",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "graphurl",
+                            "type": "string",
+                            "value": "https://graph.microsoft.com/beta"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "initok": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "runquery": {
+                "type": "If",
+                "description": "@{variables('config')?['debug']}",
+                "expression": {
+                    "and": [
+                        {
+                            "equals": [
+                                "@variables('config')?['debug']",
+                                true
+                            ]
+                        }
+                    ]
+                },
+                "actions": {
+                    "initokdebug": {
+                        "type": "SetVariable",
+                        "inputs": {
+                            "name": "ok",
+                            "value": true
+                        }
+                    }
+                },
+                "else": {
+                    "actions": {
+                        "query": {
+                            "type": "Http",
+                            "description": "https://learn.microsoft.com/en-us/graph/api/security-auditcoreroot-post-auditlogqueries?view=graph-rest-beta&tabs=http",
+                            "inputs": {
+                                "uri": "@{variables('graphurl')}/security/auditLog/queries",
+                                "method": "POST",
+                                "headers": {
+                                    "Content-Type": "application/json"
+                                },
+                                "body": {
+                                    "filterStartDateTime": "@{variables('startdate')}",
+                                    "filterEndDateTime": "@{variables('enddate')}",
+                                    "operationFilters": [
+                                        "CreatePowerApp",
+                                        "UpdatePowerApp",
+                                        "DeletePowerApp",
+                                        "LaunchPowerApp",
+                                        "PublishPowerApp",
+                                        "CreateFlow",
+                                        "UpdateFlow",
+                                        "DeleteFlow",
+                                        "StartFlowRun",
+                                        "FailFlowRun",
+                                        "BotCreate",
+                                        "BotDelete",
+                                        "BotUpdate",
+                                        "botnameupdate",
+                                        "botpublish",
+                                        "botshare",
+                                        "copilotinteraction",
+                                        "configuredcopilot"
+                                    ]
+                                },
+                                "authentication": {
+                                    "type": "ActiveDirectoryOAuth",
+                                    "authority": "https://login.microsoft.com",
+                                    "tenant": "@{variables('app')?['tenantId']}",
+                                    "audience": "https://graph.microsoft.com/",
+                                    "clientId": "@{variables('app')?['clientId']}",
+                                    "secret": "@body('getsecret')?['value']"
+                                }
+                            },
+                            "runtimeConfiguration": {
+                                "contentTransfer": {
+                                    "transferMode": "Chunked"
+                                }
+                            }
+                        },
+                        "checkrequest": {
+                            "type": "If",
+                            "expression": {
+                                "and": [
+                                    {
+                                        "equals": [
+                                            "@actions('query').outputs.statusCode",
+                                            201
+                                        ]
+                                    }
+                                ]
+                            },
+                            "actions": {
+                                "setrequestid": {
+                                    "type": "SetVariable",
+                                    "inputs": {
+                                        "name": "requestid",
+                                        "value": "@body('query')?['id']"
+                                    }
+                                },
+                                "logrequest": {
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['azuretables']['connectionId']"
+                                            }
+                                        },
+                                        "method": "patch",
+                                        "body": {
+                                            "query": "@{variables('graphurl')}/security/auditLog/queries",
+                                            "startdate": "@{variables('startdate')}",
+                                            "enddate": "@{variables('enddate')}",
+                                            "statuscode": "@{actions('query').outputs.statusCode}",
+                                            "status": "@{body('query')?['status']}"
+                                        },
+                                        "path": "/v2/storageAccounts/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/tables/@{encodeURIComponent(variables('config')?['tablequeries'])}/entities(PartitionKey='@{encodeURIComponent('query')}',RowKey='@{encodeURIComponent(variables('requestid'))}')"
+                                    },
+                                    "runAfter": {
+                                        "setrequestid": [
+                                            "Succeeded"
+                                        ]
+                                    }
+                                },
+                                "DelayAfterRequest": {
+                                    "type": "Wait",
+                                    "inputs": {
+                                        "interval": {
+                                            "count": 1,
+                                            "unit": "Minute"
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "setokrequest": [
+                                            "Succeeded"
+                                        ]
+                                    }
+                                },
+                                "setokrequest": {
+                                    "type": "SetVariable",
+                                    "inputs": {
+                                        "name": "ok",
+                                        "value": true
+                                    },
+                                    "runAfter": {
+                                        "logrequest": [
+                                            "Succeeded"
+                                        ]
+                                    }
+                                }
+                            },
+                            "else": {
+                                "actions": {
+                                    "logerror": {
+                                        "type": "ApiConnection",
+                                        "inputs": {
+                                            "host": {
+                                                "connection": {
+                                                    "name": "@parameters('$connections')['azuretables']['connectionId']"
+                                                }
+                                            },
+                                            "method": "patch",
+                                            "body": {
+                                                "query": "@{variables('graphurl')}/security/auditLog/queries",
+                                                "startdate": "@{variables('startdate')}",
+                                                "enddate": "@{variables('enddate')}",
+                                                "statuscode": "@{actions('query').outputs.statusCode}",
+                                                "status": "error"
+                                            },
+                                            "path": "/v2/storageAccounts/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/tables/@{encodeURIComponent(variables('config')?['tablequeries'])}/entities(PartitionKey='@{encodeURIComponent('query')}',RowKey='@{encodeURIComponent(guid())}')"
+                                        }
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "query": [
+                                    "Succeeded",
+                                    "Failed"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "runAfter": {
+                    "getsecret": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "initok": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "ok",
+                            "type": "boolean",
+                            "value": false
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "initauditlogquery": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "setauditlogquery": {
+                "type": "SetVariable",
+                "inputs": {
+                    "name": "auditlogquery",
+                    "value": "@{variables('graphurl')}/security/auditLog/queries/@{variables('requestid')}/records?$top=99999"
+                },
+                "runAfter": {
+                    "runquery": [
+                        "Succeeded",
+                        "Failed"
+                    ]
+                }
+            },
+            "initstatus": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "status",
+                            "type": "string",
+                            "value": "unknown"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "setauditlogquery": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "getsecret": {
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "name": "@parameters('$connections')['keyvault']['connectionId']"
+                        }
+                    },
+                    "method": "get",
+                    "path": "/secrets/@{encodeURIComponent('secret')}/value"
+                },
+                "runAfter": {
+                    "initrequestid": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "checksucceeded": {
+                "type": "If",
+                "expression": {
+                    "and": [
+                        {
+                            "equals": [
+                                "@variables('status')",
+                                "succeeded"
+                            ]
+                        }
+                    ]
+                },
+                "actions": {
+                    "querydata": {
+                        "type": "Http",
+                        "description": "https://learn.microsoft.com/en-us/graph/api/security-auditlogquery-list-records?view=graph-rest-beta&tabs=http",
+                        "inputs": {
+                            "uri": "@variables('auditlogquery')",
+                            "method": "GET",
+                            "headers": {
+                                "Content-Type": "application/json"
+                            },
+                            "authentication": {
+                                "type": "ActiveDirectoryOAuth",
+                                "authority": "https://login.microsoft.com",
+                                "tenant": "@{variables('app')?['tenantId']}",
+                                "audience": "https://graph.microsoft.com/",
+                                "clientId": "@{variables('app')?['clientId']}",
+                                "secret": "@body('getsecret')?['value']"
+                            }
+                        },
+                        "runtimeConfiguration": {
+                            "contentTransfer": {
+                                "transferMode": "Chunked"
+                            },
+                            "paginationPolicy": {
+                                "minimumItemCount": 99999
+                            }
+                        }
+                    },
+                    "foreach": {
+                        "type": "Foreach",
+                        "foreach": "@body('querydata')?['value']",
+                        "actions": {
+                            "checkFlow": {
+                                "type": "If",
+                                "expression": {
+                                    "and": [
+                                        {
+                                            "contains": [
+                                                "@item()?['operation']",
+                                                "Flow"
+                                            ]
+                                        }
+                                    ]
+                                },
+                                "actions": {
+                                    "logdataflow": {
+                                        "type": "ApiConnection",
+                                        "inputs": {
+                                            "host": {
+                                                "connection": {
+                                                    "name": "@parameters('$connections')['azuretables']['connectionId']"
+                                                }
+                                            },
+                                            "method": "patch",
+                                            "body": {
+                                                "id": "@{item()?['id']}",
+                                                "createdDateTime": "@{item()?['createdDateTime']}",
+                                                "auditLogRecordType": "@{item()?['auditLogRecordType']}",
+                                                "operation": "@{item()?['operation']}",
+                                                "userPrincipalName": "@{item()?['userPrincipalName']}",
+                                                "userId": "@{item()?['userId']}",
+                                                "userType": "@{item()?['userType']}",
+                                                "service": "@{item()?['service']}",
+                                                "environmentId": "-",
+                                                "clientIP": "@{item()?['auditData']?['ClientIP']}",
+                                                "resultStatus": "@{item()?['auditData']?['ResultStatus']}",
+                                                "displayName": "-",
+                                                "details": "@{item()?['auditData']?['FlowDetailsUrl']}"
+                                            },
+                                            "path": "/v2/storageAccounts/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/tables/@{encodeURIComponent(variables('config')?['tablelog'])}/entities(PartitionKey='@{encodeURIComponent(variables('requestid'))}',RowKey='@{encodeURIComponent(item()?['id'])}')"
+                                        }
+                                    }
+                                },
+                                "else": {
+                                    "actions": {
+                                        "checkCopilot": {
+                                            "type": "If",
+                                            "expression": {
+                                                "and": [
+                                                    {
+                                                        "contains": [
+                                                            "@item()?['operation']",
+                                                            "Copilot"
+                                                        ]
+                                                    }
+                                                ]
+                                            },
+                                            "actions": {
+                                                "logcopilot": {
+                                                    "type": "ApiConnection",
+                                                    "inputs": {
+                                                        "host": {
+                                                            "connection": {
+                                                                "name": "@parameters('$connections')['azuretables']['connectionId']"
+                                                            }
+                                                        },
+                                                        "method": "patch",
+                                                        "body": {
+                                                            "id": "@{item()?['id']}",
+                                                            "createdDateTime": "@{item()?['createdDateTime']}",
+                                                            "auditLogRecordType": "@{item()?['auditLogRecordType']}",
+                                                            "operation": "@{item()?['operation']}",
+                                                            "userPrincipalName": "@{item()?['userPrincipalName']}",
+                                                            "userId": "@{item()?['userId']}",
+                                                            "userType": "@{item()?['userType']}",
+                                                            "service": "@{item()?['service']}",
+                                                            "environmentId": "-",
+                                                            "clientIP": "@{item()?['auditData']?['ClientIP']}",
+                                                            "resultStatus": "-",
+                                                            "displayName": "@{item()?['auditData']?['CopilotEventData']?['AppHost']}",
+                                                            "details": "@{item()?['auditData']?['ClientRegion']}"
+                                                        },
+                                                        "path": "/v2/storageAccounts/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/tables/@{encodeURIComponent(variables('config')?['tablelog'])}/entities(PartitionKey='@{encodeURIComponent(variables('requestid'))}',RowKey='@{encodeURIComponent(item()?['id'])}')"
+                                                    }
+                                                }
+                                            },
+                                            "else": {
+                                                "actions": {
+                                                    "logdatapowerapp": {
+                                                        "type": "ApiConnection",
+                                                        "inputs": {
+                                                            "host": {
+                                                                "connection": {
+                                                                    "name": "@parameters('$connections')['azuretables']['connectionId']"
+                                                                }
+                                                            },
+                                                            "method": "patch",
+                                                            "body": {
+                                                                "id": "@{item()?['id']}",
+                                                                "createdDateTime": "@{item()?['createdDateTime']}",
+                                                                "auditLogRecordType": "@{item()?['auditLogRecordType']}",
+                                                                "operation": "@{item()?['operation']}",
+                                                                "userPrincipalName": "@{item()?['userPrincipalName']}",
+                                                                "userId": "@{item()?['userId']}",
+                                                                "userType": "@{item()?['userType']}",
+                                                                "service": "@{item()?['service']}",
+                                                                "environmentId": "@{item()?['auditData']?['EnvironmentId']}",
+                                                                "clientIP": "@{item()?['auditData']?['ClientIP']}",
+                                                                "resultStatus": "@{item()?['auditData']?['ResultStatus']}",
+                                                                "displayName": "@{item()?['auditData']?['PropertyCollection'][0]?['Value']}",
+                                                                "details": "-"
+                                                            },
+                                                            "path": "/v2/storageAccounts/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/tables/@{encodeURIComponent(variables('config')?['tablelog'])}/entities(PartitionKey='@{encodeURIComponent(variables('requestid'))}',RowKey='@{encodeURIComponent(item()?['id'])}')"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "runAfter": {
+                            "querydata": [
+                                "Succeeded"
+                            ]
+                        }
+                    }
+                },
+                "else": {
+                    "actions": {}
+                },
+                "runAfter": {
+                    "checkok": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "initrequestid": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "requestid",
+                            "type": "string",
+                            "value": "35112860-c2ce-478d-a141-b2e1a784905f"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "initgraphurl": [
+                        "Succeeded"
+                    ]
+                }
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": {
+                "type": "Object",
+                "defaultValue": {}
+            }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "azuretables": {
+                    "id": "/subscriptions/<subscription-id>/providers/Microsoft.Web/locations/westeurope/managedApis/azuretables",
+                    "connectionId": "/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.Web/connections/azuretables",
+                    "connectionName": "azuretables",
+                    "connectionProperties": {}
+                },
+                "keyvault": {
+                    "id": "/subscriptions/<subscription-id>/providers/Microsoft.Web/locations/westeurope/managedApis/keyvault",
+                    "connectionId": "/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.Web/connections/keyvault",
+                    "connectionName": "keyvault",
+                    "connectionProperties": {
+                        "authentication": {
+                            "identity": "/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<managed-identity-name>",
+                            "type": "ManagedServiceIdentity"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
